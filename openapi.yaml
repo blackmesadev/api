@@ -1,0 +1,195 @@
+openapi: 3.0.0
+info:
+  title: Black Mesa API
+  version: '1.0.0'
+  description: API for Black Mesa Discord bot configuration
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Id:
+      type: string
+      description: Discord snowflake ID
+      pattern: '^\d+$'
+      example: "123456789012345678"
+
+    Config:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        prefix:
+          type: string
+          default: "!"
+        mute_role:
+          $ref: '#/components/schemas/Id'
+        default_warn_duration:
+          type: integer
+          format: int64
+        log_channel:
+          $ref: '#/components/schemas/Id'
+        prefer_embeds:
+          type: boolean
+          default: false
+        inherit_discord_perms:
+          type: boolean
+          default: true
+        alert_on_infraction:
+          type: boolean
+          default: true
+        send_permission_denied:
+          type: boolean
+          default: true
+        permission_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/Group'
+        command_aliases:
+          type: object
+          additionalProperties:
+            type: string
+
+    Group:
+      type: object
+      required:
+        - name
+        - roles
+        - users
+        - permissions
+      properties:
+        name:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        permissions:
+          type: array
+          items:
+            type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+paths:
+  /healthz:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "OK"
+
+  /oauth/discord:
+    get:
+      summary: Discord OAuth2 callback
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /oauth/refresh:
+    get:
+      summary: Refresh Discord token
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Successfully refreshed token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/config/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          $ref: '#/components/schemas/Id'
+    get:
+      summary: Get guild configuration
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Successfully retrieved config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Config'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Config not found
+    post:
+      summary: Update guild configuration
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Config'
+      responses:
+        '200':
+          description: Successfully updated config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Config'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+
+security:
+  - bearerAuth: []
