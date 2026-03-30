@@ -1,27 +1,30 @@
 [package]
 name = "mesa-api"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tracing = { version = "0.1", features = ["attributes"] }
-tracing-subscriber = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = { version = "0.28" }
+tracing-actix-web = { version = "0.7", features = ["opentelemetry_0_27"] }
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tonic = { version = "0.12", features = ["transport"] }
 dotenv = "0.15"
 thiserror = "2.0"
-opentelemetry = { version = "0.26" }
-opentelemetry-otlp = { version = "0.26", features = ["http-proto", "reqwest-client"] }
-opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.27"
 base64 = "0.22"
 actix-web = "4.0"
-reqwest = {version = "0.12", features = ["json"]}
-jsonwebtoken = "9.3"
+actix-cors = "0.7"
+reqwest = { version = "0.13", features = ["json", "form"] }
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 chrono = "0.4"
 futures = "0.3"
 pin-project-lite = "0.2"
 
-bm-lib = { workspace = true }
+# bm-lib = { path = "../lib" }
+bm-lib = { git = "https://github.com/blackmesadev/lib.git" }

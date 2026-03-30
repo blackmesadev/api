@@ -1,78 +1,107 @@
 mod api;
 mod auth;
-mod cache;
+mod data;
+mod config;
 mod discord;
 mod error;
+mod guilds;
+mod infractions;
 mod jwt;
 mod permissions;
 mod telemetry;
 
-use crate::telemetry::TracingMiddleware;
 use actix_web::{get, web::Data, App, HttpServer};
+use actix_cors::Cors;
 use bm_lib::{
     cache::{Cache, RedisCache},
-    db::Database,
+    db::Database, discord::DiscordRestClient,
 };
+use config::Settings;
 use discord::RestClient;
+use tracing_actix_web::TracingLogger;
 
 const SERVICE_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " v", env!("CARGO_PKG_VERSION"));
 
 pub struct State {
     pub db: Database,
-    pub rest: RestClient,
     pub cache: Cache<RedisCache>,
+    pub bot_cache: Cache<RedisCache>,
+    pub rest: RestClient,
+    pub bot: DiscordRestClient,
+    pub jwt_secret: String,
 }
 
 impl State {
-    pub async fn new() -> Self {
-        let database_url = std::env::var("MONGO_URI").expect("MONGO_URI must be set");
-        let redis_uri = std::env::var("REDIS_URI").expect("REDIS_URI must be set");
-
+    pub async fn new(settings: &Settings) -> Self {
         Self {
-            db: Database::connect(database_url, "black-mesa")
-                .await
-                .expect("Failed to connect to database"),
-            rest: RestClient::new(),
+            db: {
+                let db = Database::connect(settings.database_url.clone())
+                    .await
+                    .expect("Failed to connect to database");
+                db.migrate()
+                    .await
+                    .expect("Failed to run database migrations");
+                db
+            },
             cache: Cache::new(
-                RedisCache::new(redis_uri)
+                RedisCache::new(settings.redis_uri.clone(), settings.redis_prefix.clone())
                     .await
                     .expect("Failed to connect to Redis"),
             ),
+            bot_cache: Cache::new(
+                RedisCache::new(settings.redis_uri.clone(), settings.bot_redis_prefix.clone())
+                    .await
+                    .expect("Failed to connect to bot Redis namespace"),
+            ),
+            rest: RestClient::new(
+                settings.discord_client_id.clone(),
+                settings.discord_client_secret.clone(),
+                settings.discord_redirect_uri.clone(),
+            ),
+            bot: DiscordRestClient::new(&settings.discord_bot_token),
+            jwt_secret: settings.jwt_secret.clone(),
         }
     }
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    dotenv::dotenv().ok();
+    let settings = Settings::from_env()?;
 
-    let openobserve_endpoint = std::env::var("OPENOBSERVE_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:5080/api/mesa-api/v1/traces".to_string());
-
-    let openobserve_email =
-        std::env::var("OPENOBSERVE_EMAIL").expect("OPENOBSERVE_EMAIL not found");
-    let openobserve_password =
-        std::env::var("OPENOBSERVE_PASSWORD").expect("OPENOBSERVE_PASSWORD not found");
-
-    telemetry::init_telemetry(
-        &openobserve_endpoint,
-        &openobserve_email,
-        &openobserve_password,
+    let _tracer = telemetry::init(
+        SERVICE_NAME,
+        &settings.otlp_endpoint,
+        settings.otlp_auth.as_deref(),
+        settings.otlp_organization.as_deref(),
     );
 
-    let state = Data::new(State::new().await);
+    let state = Data::new(State::new(&settings).await);
 
     HttpServer::new(move || {
         App::new()
-            .wrap(TracingMiddleware)
+            .wrap(
+                Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header(),
+            )
+            .wrap(TracingLogger::default())
             .service(healthz)
-            .service(api::post_config)
-            .service(api::get_config)
+            // Auth
             .service(auth::oauth_discord)
             .service(auth::refresh_token)
+            // Guild config
+            .service(api::get_config)
+            .service(api::post_config)
+            // Guilds
+            .service(guilds::get_guilds)
+            // Infractions
+            .service(infractions::get_infractions)
+            .service(infractions::create_infraction)
+            .service(infractions::deactivate_infraction)
             .app_data(state.clone())
     })
-    .bind(("0.0.0.0", 8080))?
+    .bind((settings.api_host.clone(), settings.api_port))?
     .run()
     .await
 }

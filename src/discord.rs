@@ -1,4 +1,3 @@
-use bm_lib::discord::{Guild, Id, Member};
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::instrument;
@@ -10,7 +9,6 @@ pub struct RestClient {
     client_secret: String,
     redirect_uri: String,
     client: reqwest::Client,
-    bot_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,15 +21,12 @@ pub struct DiscordOAuthResponse {
 }
 
 impl RestClient {
-    pub fn new() -> Self {
+    pub fn new(client_id: String, client_secret: String, redirect_uri: String) -> Self {
         Self {
             client: reqwest::Client::new(),
-            client_id: std::env::var("DISCORD_CLIENT_ID").expect("DISCORD_CLIENT_ID must be set"),
-            client_secret: std::env::var("DISCORD_CLIENT_SECRET")
-                .expect("DISCORD_CLIENT_SECRET must be set"),
-            redirect_uri: std::env::var("DISCORD_REDIRECT_URI")
-                .expect("DISCORD_REDIRECT_URI must be set"),
-            bot_token: std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN must be set"),
+            client_id,
+            client_secret,
+            redirect_uri,
         }
     }
 
@@ -44,17 +39,13 @@ impl RestClient {
             .await
     }
 
-    #[instrument(skip(self))]
-    pub async fn bot_get(&self, path: &str) -> Result<reqwest::Response, reqwest::Error> {
-        self.client
-            .get(&format!("{}/{}", API_BASE, path))
-            .header("Authorization", format!("Bot {}", self.bot_token))
-            .send()
-            .await
-    }
-
     #[instrument(skip(self, code))]
-    pub async fn oauth_token(&self, code: String) -> Result<DiscordOAuthResponse, reqwest::Error> {
+    pub async fn oauth_token(
+        &self,
+        code: String,
+        redirect_uri_override: Option<String>,
+    ) -> Result<DiscordOAuthResponse, reqwest::Error> {
+        let redirect = redirect_uri_override.unwrap_or_else(|| self.redirect_uri.clone());
         let response = self
             .client
             .post(&format!("{}/oauth2/token", API_BASE))
@@ -64,8 +55,8 @@ impl RestClient {
                 ("client_secret", self.client_secret.clone()),
                 ("grant_type", "authorization_code".to_owned()),
                 ("code", code),
-                ("redirect_uri", self.redirect_uri.clone()),
-                ("scope", "identify".to_string()),
+                ("redirect_uri", redirect),
+                ("scope", "identify guilds".to_string()),
             ])
             .send()
             .await?;
@@ -76,22 +67,6 @@ impl RestClient {
     #[instrument(skip(self, token))]
     pub async fn get_self(&self, token: &str) -> Result<Value, reqwest::Error> {
         self.get("users/@me", token).await?.json().await
-    }
-
-    #[instrument(skip(self))]
-    pub async fn get_guild(&self, guild_id: &Id) -> Result<Guild, reqwest::Error> {
-        self.bot_get(&format!("guilds/{}", guild_id))
-            .await?
-            .json()
-            .await
-    }
-
-    #[instrument(skip(self))]
-    pub async fn get_member(&self, guild_id: &Id, user_id: &Id) -> Result<Member, reqwest::Error> {
-        self.bot_get(&format!("guilds/{}/members/{}", guild_id, user_id))
-            .await?
-            .json()
-            .await
     }
 
     #[instrument(skip(self, refresh_token))]

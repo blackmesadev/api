@@ -7,7 +7,7 @@ pub enum ApiError {
     Discord(#[from] reqwest::Error),
 
     #[error("Database error: {0}")]
-    Database(#[from] bm_lib::db::MongoError),
+    Database(#[from] bm_lib::db::DbError),
 
     #[error("Cache error: {0}")]
     Cache(#[from] bm_lib::cache::RedisCacheError),

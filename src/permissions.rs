@@ -1,6 +1,5 @@
 use bm_lib::{
-    model::Config,
-    permissions::{Permission, PermissionSet},
+    discord::Guild, model::Config, permissions::{Permission, PermissionSet}
 };
 use tracing::instrument;
 
@@ -11,40 +10,38 @@ impl State {
     pub async fn check_permission(
         &self,
         config: &Config,
+        guild: Option<&Guild>,
         user: &AuthenticatedUser,
         perm: Permission,
     ) -> Result<bool, ApiError> {
+        // Check if user is guild owner first (always bypasses)
+        if let Some(guild) = guild {
+            if guild.owner_id == Some(user.user_id) {
+                tracing::debug!("User is guild owner, permission granted");
+                return Ok(true);
+            }
+        }
+
+        // Check Discord role-based permissions if inherit_discord_perms is enabled
         if config.inherit_discord_perms {
-            let discord_span = tracing::info_span!(
-                "discord_permission_check",
-                guild_id = %config.id,
-                otel.kind = "client"
-            );
-            let _enter = discord_span.enter();
-
-            tracing::debug!("Checking Discord permissions");
-            if let Ok(Some(guild)) = self.get_guild(&config.id).await {
-                let roles = &guild.roles;
-
-                let member = self.get_member(&config.id, &user.user_id).await?;
-
-                let perms = PermissionSet::from_discord_permissions(roles, &member.roles);
-
-                if perms.has_permission(&perm) {
-                    tracing::debug!("Permission granted via Discord roles");
-                    return Ok(true);
+            if let Some(guild) = guild {
+                if let Ok(Some(user_roles)) = self.get_member_roles(&guild.id, &user.user_id).await {
+                    tracing::debug!(role_count = user_roles.len(), "Checking Discord roles");
+                    let perms = PermissionSet::from_discord_permissions(&guild.roles, &user_roles);
+                    if perms.has_permission(&perm) {
+                        tracing::debug!("User has Discord permission");
+                        return Ok(true);
+                    }
                 }
             }
         }
 
+        // Check permission groups
         if let Some(groups) = &config.permission_groups {
             tracing::debug!(group_count = groups.len(), "Checking permission groups");
             if groups
                 .iter()
-                .any(|group| group.users.contains(&user.user_id))
-                && groups
-                    .iter()
-                    .any(|group| group.permissions.has_permission(&perm))
+                .any(|group| group.users.contains(&user.user_id) && group.permissions.has_permission(&perm))
             {
                 return Ok(true);
             }

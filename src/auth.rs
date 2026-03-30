@@ -15,6 +15,7 @@ use crate::{
 #[derive(Debug, Deserialize)]
 struct OAuthParams {
     pub code: String,
+    pub redirect_uri: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,6 +28,9 @@ pub struct AuthenticatedUser {
     pub user_id: Id,
     pub discord_token: String,
     pub discord_refresh: String,
+    pub discord_token_type: String,
+    pub discord_scope: String,
+    pub discord_expires_in: u64,
 }
 
 impl FromRequest for AuthenticatedUser {
@@ -49,11 +53,13 @@ impl FromRequest for AuthenticatedUser {
             }
 
             let token = auth_header.trim_start_matches("Bearer ");
-            let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+            let state = req
+                .app_data::<web::Data<State>>()
+                .ok_or_else(|| ApiError::Internal("App state not configured".to_string()))?;
 
             let claims = decode::<Claims>(
                 token,
-                &DecodingKey::from_secret(jwt_secret.as_bytes()),
+                &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
                 &Validation::default(),
             )
             .map_err(|_| ApiError::Auth("Invalid token".to_string()))?;
@@ -68,20 +74,26 @@ impl FromRequest for AuthenticatedUser {
                 user_id,
                 discord_token: claims.claims.discord_token,
                 discord_refresh: claims.claims.discord_refresh,
+                discord_token_type: claims.claims.discord_token_type,
+                discord_scope: claims.claims.discord_scope,
+                discord_expires_in: claims.claims.discord_expires_in,
             })
         })
     }
 }
 
-#[get("/oauth/discord")]
+#[get("/api/oauth/discord")]
 #[instrument(skip(state, params))]
 pub async fn oauth_discord(
     state: web::Data<State>,
     params: web::Query<OAuthParams>,
 ) -> Result<web::Json<AuthResponse>, ApiError> {
-    let discord_response = state.rest.oauth_token(params.code.clone()).await?;
+    let oauth_response = state
+        .rest
+        .oauth_token(params.code.clone(), params.redirect_uri.clone())
+        .await?;
 
-    let me = state.rest.get_self(&discord_response.access_token).await?;
+    let me = state.rest.get_self(&oauth_response.access_token).await?;
 
     let id = me["id"]
         .as_str()
@@ -89,42 +101,35 @@ pub async fn oauth_discord(
 
     let token = jwt::create_token(
         id,
-        &discord_response.access_token,
-        &discord_response.refresh_token,
-        discord_response.expires_in,
-    );
+        &oauth_response.access_token,
+        &oauth_response.refresh_token,
+        &oauth_response.token_type,
+        &oauth_response.scope,
+        oauth_response.expires_in,
+        &state.jwt_secret,
+    )
+    .map_err(|e| ApiError::Internal(format!("Failed to create token: {e}")))?;
 
     Ok(web::Json(AuthResponse { token }))
 }
 
-#[get("/oauth/refresh")]
+#[get("/api/oauth/refresh")]
 #[instrument(skip(state), fields(user_id = %user.user_id))]
 pub async fn refresh_token(
     state: web::Data<State>,
     user: AuthenticatedUser,
-) -> Result<web::Json<AuthResponse>, actix_web::Error> {
-    let refresh_response = state
-        .rest
-        .refresh_token(&user.discord_refresh)
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-
-    let me = state
-        .rest
-        .get_self(&refresh_response.access_token)
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-
-    let id = me["id"]
-        .as_str()
-        .ok_or_else(|| actix_web::error::ErrorInternalServerError("ID not found in response"))?;
-
+) -> Result<web::Json<AuthResponse>, ApiError> {
+    // Local JWT refresh: no Discord token refresh or bot API calls required.
     let token = jwt::create_token(
-        id,
-        &refresh_response.access_token,
-        &refresh_response.refresh_token,
-        refresh_response.expires_in,
-    );
+        &user.user_id.to_string(),
+        &user.discord_token,
+        &user.discord_refresh,
+        &user.discord_token_type,
+        &user.discord_scope,
+        user.discord_expires_in,
+        &state.jwt_secret,
+    )
+        .map_err(|e| ApiError::Internal(format!("Failed to create token: {e}")))?;
 
     Ok(web::Json(AuthResponse { token }))
 }

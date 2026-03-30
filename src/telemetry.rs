@@ -1,147 +1,80 @@
-use std::collections::HashMap;
-use std::future::{ready, Ready};
-
-use actix_web::{
-    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    Error,
+use opentelemetry::{
+    global, propagation::TextMapCompositePropagator, trace::TracerProvider as _, KeyValue,
 };
-use base64::Engine;
-use futures::Future;
-use opentelemetry::{trace::TracerProvider, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithTonicConfig};
 use opentelemetry_sdk::{
-    trace::{Config, Sampler},
+    propagation::{BaggagePropagator, TraceContextPropagator},
+    trace::{BatchConfigBuilder, BatchSpanProcessor, TracerProvider as SdkTracerProvider},
     Resource,
 };
-use pin_project_lite::pin_project;
-use std::pin::Pin;
-use tracing::instrument::Instrumented;
-use tracing::Instrument;
-use tracing_subscriber::{filter::FilterFn, layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tonic::metadata::MetadataMap;
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::SERVICE_NAME;
-
-pub struct TracingMiddleware;
-
-impl<S, B> Transform<S, ServiceRequest> for TracingMiddleware
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = ServiceResponse<B>;
-    type Error = Error;
-    type InitError = ();
-    type Transform = TracingMiddlewareService<S>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(TracingMiddlewareService { service }))
-    }
-}
-
-pub struct TracingMiddlewareService<S> {
-    service: S,
-}
-
-pin_project! {
-    pub struct TracingResponseFuture<F> {
-        #[pin]
-        fut: Instrumented<F>,
-    }
-}
-
-impl<F, B> Future for TracingResponseFuture<F>
-where
-    F: Future<Output = Result<ServiceResponse<B>, Error>>,
-{
-    type Output = Result<ServiceResponse<B>, Error>;
-
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        self.project().fut.poll(cx)
-    }
-}
-
-impl<S, B> Service<ServiceRequest> for TracingMiddlewareService<S>
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = ServiceResponse<B>;
-    type Error = Error;
-    type Future = TracingResponseFuture<S::Future>;
-
-    forward_ready!(service);
-
-    fn call(&self, req: ServiceRequest) -> Self::Future {
-        let method = req.method().to_string();
-        let path = req.path().to_string();
-
-        let span = tracing::info_span!(
-            "http_request",
-            method = %method,
-            path = %path,
-            otel.kind = "server"
+/// Initialise tracing with an OTLP exporter pointed at Tempo (or any
+/// OTLP-compatible backend).  Returns the provider so callers can drive a
+/// clean `shutdown()` on exit.
+pub fn init(
+    service_name: &'static str,
+    otlp_endpoint: &str,
+    otlp_auth: Option<&str>,
+    otlp_organization: Option<&str>,
+) -> SdkTracerProvider {
+    let mut metadata = MetadataMap::new();
+    if let Some(auth) = otlp_auth {
+        metadata.insert(
+            "authorization",
+            auth.parse().expect("invalid auth header value"),
         );
-
-        TracingResponseFuture {
-            fut: self.service.call(req).instrument(span),
-        }
     }
-}
+    if let Some(org) = otlp_organization {
+        metadata.insert(
+            "organization",
+            org.parse().expect("invalid organization header value"),
+        );
+    }
 
-pub fn init_telemetry(endpoint: &str, email: &str, password: &str) {
-    let auth = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", email, password));
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        format!("Basic {}", auth).parse().unwrap(),
-    );
+    let channel = tonic::transport::Channel::from_shared(otlp_endpoint.to_string())
+        .expect("invalid OTLP endpoint URI")
+        .connect_lazy();
 
-    let provider = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_endpoint(endpoint)
-                .with_headers(headers),
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_channel(channel)
+        .with_metadata(metadata)
+        .build()
+        .expect("Failed to build OTLP span exporter");
+
+    let resource = Resource::new([KeyValue::new("service.name", service_name)]);
+
+    let processor = BatchSpanProcessor::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+        .with_batch_config(
+            BatchConfigBuilder::default()
+                .with_scheduled_delay(std::time::Duration::from_secs(1))
+                .build(),
         )
-        .with_trace_config(
-            Config::default()
-                .with_sampler(Sampler::AlwaysOn)
-                .with_resource(Resource::new(vec![
-                    KeyValue::new("service.name", env!("CARGO_PKG_NAME")),
-                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                ])),
-        )
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .expect("Failed to install OpenTelemetry provider");
+        .build();
 
-    let tracer = provider.tracer(SERVICE_NAME);
-    opentelemetry::global::set_tracer_provider(provider);
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .with_resource(resource)
+        .build();
 
-    let filter = FilterFn::new(|metadata| {
-        let target = metadata.target();
-        !target.starts_with("hyper_util")
-            && !target.starts_with("hyper::client")
-            && !target.starts_with("hyper::server")
-    });
+    let tracer = provider.tracer(service_name);
 
-    let telemetry = tracing_opentelemetry::layer()
-        .with_tracer(tracer)
-        .with_filter(filter.clone());
-
-    let fmt = tracing_subscriber::fmt::layer()
-        .with_target(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-        .with_filter(filter);
+    global::set_text_map_propagator(TextMapCompositePropagator::new(vec![
+        Box::new(TraceContextPropagator::new()),
+        Box::new(BaggagePropagator::new()),
+    ]));
 
     tracing_subscriber::registry()
-        .with(telemetry)
-        .with(fmt)
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,h2=off,hyper=off,tower=off")),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .with(OpenTelemetryLayer::new(tracer))
         .init();
+
+    provider
 }

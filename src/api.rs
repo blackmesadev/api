@@ -20,8 +20,12 @@ pub async fn get_config(
         None => return Err(ApiError::NotFound("Config not found".to_string())),
     };
 
+    let guild = state.get_guild(&id).await?.ok_or_else(|| {
+        ApiError::NotFound("Guild not found".into())
+    })?;
+
     if !state
-        .check_permission(&config, &user, Permission::ConfigView)
+        .check_permission(&config, Some(&guild), &user, Permission::ConfigView)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".to_string()));
@@ -46,8 +50,17 @@ pub async fn post_config(
         ));
     }
 
+    let config = match state.get_config(&id).await? {
+        Some(config) => config,
+        None => return Err(ApiError::NotFound("Config not found".to_string())),
+    };
+
+    let guild = state.get_guild(&id).await?.ok_or_else(|| {
+        ApiError::NotFound("Guild not found".into())
+    })?;
+
     if !state
-        .check_permission(&config, &user, Permission::ConfigEdit)
+        .check_permission(&config, Some(&guild), &user, Permission::ConfigEdit)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".to_string()));
@@ -55,5 +68,5 @@ pub async fn post_config(
 
     state.update_config(&id, &config).await?;
 
-    Ok(config)
+    Ok(web::Json(config))
 }
