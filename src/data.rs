@@ -1,8 +1,11 @@
-use std::time::Duration;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use crate::error::ApiError;
-use bm_lib::{discord::{Guild, Id}, model::Config};
+use bm_lib::{
+    discord::{Guild, Id},
+    model::Config,
+};
 use tracing::instrument;
 
 use crate::State;
@@ -19,12 +22,14 @@ fn roles_cache_key(guild_id: &Id, user_id: &Id) -> String {
     format!("roles:{}:{}", guild_id, user_id)
 }
 
+#[inline]
+fn member_guilds_cache_key(user_id: &Id) -> String {
+    format!("member_guilds:{}", user_id)
+}
+
 impl State {
     #[instrument(skip(self))]
-    pub async fn get_guild(
-        &self,
-        guild_id: &Id,
-    ) -> Result<Option<Guild>, ApiError> {
+    pub async fn get_guild(&self, guild_id: &Id) -> Result<Option<Guild>, ApiError> {
         let key = guild_cache_key(guild_id);
         self.bot_cache
             .get::<String, Guild>(&key)
@@ -71,5 +76,37 @@ impl State {
             .get::<String, HashSet<Id>>(&key)
             .await
             .map_err(ApiError::from)
+    }
+
+    /// Returns the set of guild IDs the bot has observed this user in, using
+    /// the `member_guilds:{user_id}` reverse index written by the bot on every
+    /// `GuildMemberUpdate` event.  O(1) — no keyspace scan.
+    #[instrument(skip(self))]
+    pub async fn get_member_guilds(&self, user_id: &Id) -> Result<HashSet<Id>, ApiError> {
+        let key = member_guilds_cache_key(user_id);
+        Ok(self
+            .bot_cache
+            .get::<String, HashSet<Id>>(&key)
+            .await
+            .map_err(ApiError::from)?
+            .unwrap_or_default())
+    }
+
+    /// Returns every role ID the user holds across all guilds the bot knows
+    /// about, by fetching per-guild `roles:{guild_id}:{user_id}` entries for
+    /// each guild in the reverse index.  O(m) pipelined where m = guild count.
+    #[instrument(skip(self))]
+    pub async fn get_all_member_roles(
+        &self,
+        user_id: &Id,
+        guild_ids: &HashSet<Id>,
+    ) -> Result<HashSet<Id>, ApiError> {
+        let mut all_roles = HashSet::new();
+        for guild_id in guild_ids {
+            if let Some(roles) = self.get_member_roles(guild_id, user_id).await? {
+                all_roles.extend(roles);
+            }
+        }
+        Ok(all_roles)
     }
 }

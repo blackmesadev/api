@@ -1,11 +1,49 @@
-use bm_lib::{
-    discord::Guild, model::Config, permissions::{Permission, PermissionSet}
-};
+use bm_lib::{discord::Guild, model::Config, permissions::Permission};
 use tracing::instrument;
 
 use crate::{auth::AuthenticatedUser, error::ApiError, State};
 
 impl State {
+    /// Compute the effective [`Permission`] for a user in a guild.
+    ///
+    /// Combines Discord role permissions (when `config.inherit_discord_perms` is
+    /// enabled) with any Black Mesa permission groups the user belongs to, either
+    /// directly by user ID or via their Discord roles.
+    #[instrument(skip(self, config), fields(guild_id = %guild.id, user_id = %user_id))]
+    pub async fn resolve_member_permissions(
+        &self,
+        config: &Config,
+        guild: &Guild,
+        user_id: &bm_lib::discord::Id,
+    ) -> Result<Permission, ApiError> {
+        let member_roles = if config.inherit_discord_perms {
+            self.get_member_roles(&guild.id, user_id).await?
+        } else {
+            None
+        };
+
+        let mut perms = if let Some(roles) = &member_roles {
+            Permission::from_discord_permissions(&guild.roles, roles)
+        } else {
+            Permission::empty()
+        };
+
+        if let Some(groups) = &config.permission_groups {
+            for group in groups {
+                let in_group = group.users.contains(user_id)
+                    || member_roles
+                        .as_ref()
+                        .map(|roles| group.roles.iter().any(|r| roles.contains(r)))
+                        .unwrap_or(false);
+                if in_group {
+                    perms |= group.permissions;
+                }
+            }
+        }
+
+        Ok(perms)
+    }
+
     #[instrument(skip(self, config, user), fields(guild_id = %config.id, user_id = %user.user_id))]
     pub async fn check_permission(
         &self,
@@ -14,37 +52,22 @@ impl State {
         user: &AuthenticatedUser,
         perm: Permission,
     ) -> Result<bool, ApiError> {
-        // Check if user is guild owner first (always bypasses)
-        if let Some(guild) = guild {
-            if guild.owner_id == Some(user.user_id) {
-                tracing::debug!("User is guild owner, permission granted");
-                return Ok(true);
-            }
+        let Some(guild) = guild else {
+            return Ok(false);
+        };
+
+        // Guild owner always bypasses permission checks.
+        if guild.owner_id == Some(user.user_id) {
+            tracing::debug!("User is guild owner, permission granted");
+            return Ok(true);
         }
 
-        // Check Discord role-based permissions if inherit_discord_perms is enabled
-        if config.inherit_discord_perms {
-            if let Some(guild) = guild {
-                if let Ok(Some(user_roles)) = self.get_member_roles(&guild.id, &user.user_id).await {
-                    tracing::debug!(role_count = user_roles.len(), "Checking Discord roles");
-                    let perms = PermissionSet::from_discord_permissions(&guild.roles, &user_roles);
-                    if perms.has_permission(&perm) {
-                        tracing::debug!("User has Discord permission");
-                        return Ok(true);
-                    }
-                }
-            }
-        }
+        let perms = self
+            .resolve_member_permissions(config, guild, &user.user_id)
+            .await?;
 
-        // Check permission groups
-        if let Some(groups) = &config.permission_groups {
-            tracing::debug!(group_count = groups.len(), "Checking permission groups");
-            if groups
-                .iter()
-                .any(|group| group.users.contains(&user.user_id) && group.permissions.has_permission(&perm))
-            {
-                return Ok(true);
-            }
+        if perms.has_permission(perm) {
+            return Ok(true);
         }
 
         tracing::debug!("Permission check failed");

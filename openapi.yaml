@@ -1,8 +1,18 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: Black Mesa API
   version: '1.0.0'
-  description: API for Black Mesa Discord bot dashboard integrations.
+  description: |
+    REST API for the Black Mesa Discord moderation bot.
+
+    All endpoints under `/api/` require a Bearer JWT obtained via the
+    `/api/oauth/discord` flow. The token encodes the caller's Discord user
+    ID and OAuth tokens and is validated on every request.
+
+    **Permission model**: each protected endpoint checks a specific
+    `PermissionSet` flag against the caller.  Flags are a `u64` bitfield —
+    see the [Permissions docs](https://docs.blackmesa.bot/bot/permissions/)
+    for a full flag reference.
 
 servers:
   - url: http://localhost:8080
@@ -13,11 +23,14 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT issued by `/api/oauth/discord`.  Pass as `Authorization: Bearer <token>`.
 
   schemas:
     Id:
       type: string
-      description: Discord snowflake ID
+      description: Discord snowflake ID (64-bit integer encoded as a decimal string).
       pattern: '^\d+$'
       example: '123456789012345678'
 
@@ -33,13 +46,37 @@ components:
       properties:
         token:
           type: string
+          description: Signed JWT for use in subsequent API requests.
+      example:
+        token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwMTIzNDU2NzgiLCJleHAiOjE3NzUwNzIwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
 
     ApiError:
-      description: Error payload returned by Actix error handlers.
+      description: Error payload returned by error handlers.
       oneOf:
         - type: string
         - type: object
           additionalProperties: true
+
+    PermissionBits:
+      type: integer
+      format: int64
+      minimum: 0
+      description: |
+        64-bit permission bitfield. Each named flag is a power of two.
+        Common values:
+        - `MODERATION_KICK`  = 1
+        - `MODERATION_BAN`   = 2
+        - `MODERATION`       = 511 (all moderation flags)
+        - `MUSIC`            = 130560 (all music flags)
+        - `CONFIG_VIEW`      = 131072
+        - `CONFIG_EDIT`      = 262144
+        - `CONFIG`           = 393216
+        - `INFRACTION_VIEW`  = 524288
+        - `INFRACTION_EDIT`  = 1048576
+        - `INFRACTION`       = 1572864
+        - `UTILITY`          = 268369920
+        - `ALL`              = 268435455
+      example: 511
 
     Group:
       type: object
@@ -51,18 +88,288 @@ components:
       properties:
         name:
           type: string
+          description: Unique group name within the guild.
         roles:
           type: array
+          description: Discord role IDs whose holders inherit this group's permissions.
           items:
             $ref: '#/components/schemas/Id'
         users:
           type: array
+          description: Individual user IDs explicitly added to this group.
           items:
             $ref: '#/components/schemas/Id'
         permissions:
+          $ref: '#/components/schemas/PermissionBits'
+      example:
+        name: moderators
+        roles:
+          - '123456789012345678'
+          - '222333444555666777'
+        users:
+          - '987654321098765432'
+        permissions: 511
+
+    PermissionOverride:
+      type: object
+      description: Identifies groups, roles, and users that are exempt from an automod rule.
+      properties:
+        groups:
           type: array
           items:
             type: string
+          description: Permission group names.
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          description: Discord role IDs.
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          description: User IDs.
+      example:
+        groups:
+          - moderators
+        roles:
+          - '123456789012345678'
+        users: []
+
+    CensorType:
+      type: string
+      enum: [word, link, invite]
+      description: |
+        - `word`: matches patterns against message text (supports `*` wildcard and `...` middle-match).
+        - `link`: matches exact domain names in URLs.
+        - `invite`: matches specific Discord invite codes on `discord.gg`.
+
+    SpamType:
+      type: string
+      enum: [message, newline]
+      description: |
+        - `message`: counts total messages per window.
+        - `newline`: triggers when a single message exceeds a newline count threshold.
+
+    CensorAction:
+      type: object
+      required:
+        - action
+        - duration
+      properties:
+        action:
+          $ref: '#/components/schemas/InfractionType'
+        duration:
+          type: integer
+          format: int64
+          description: Duration in **milliseconds** for timed infractions (mute/ban). Ignored for kick/warn.
+      example:
+        action: warn
+        duration: 0
+
+    SpamAction:
+      type: object
+      required:
+        - action
+        - duration
+        - threshold
+      properties:
+        action:
+          $ref: '#/components/schemas/InfractionType'
+        duration:
+          type: integer
+          format: int64
+          description: Duration in milliseconds.
+        threshold:
+          type: integer
+          format: int64
+          description: Minimum cumulative violation count required to trigger this action.
+      example:
+        action: mute
+        duration: 300000
+        threshold: 3
+
+    SpamInterval:
+      type: object
+      required:
+        - interval
+        - count
+      properties:
+        interval:
+          type: integer
+          format: int64
+          description: Sliding window width in **milliseconds**. `0` matches all messages regardless of time.
+        count:
+          type: integer
+          format: int64
+          description: Number of events in the window required to register a hit.
+      example:
+        interval: 5000
+        count: 5
+
+    Censor:
+      type: object
+      required:
+        - enabled
+        - filters
+        - action
+      properties:
+        enabled:
+          type: boolean
+        whitelist:
+          type: boolean
+          default: false
+          description: When `true`, only messages that do **not** match the filters are blocked.
+        filters:
+          type: array
+          items:
+            type: string
+          description: |
+            Patterns to match. For `word` type: supports `*` (any suffix) and `...` (requires content
+            between prefix and suffix). For `link`: exact domain names. For `invite`: invite codes.
+        ignore_whitespace:
+          type: boolean
+          default: false
+          description: Strip whitespace from message before matching.
+        bypass:
+          $ref: '#/components/schemas/PermissionOverride'
+        action:
+          $ref: '#/components/schemas/CensorAction'
+      example:
+        enabled: true
+        filters:
+          - '*badword*'
+          - 'spam...'
+          - 'discord.gg/abc123'
+        action:
+          action: warn
+          duration: 0
+
+    SpamFilter:
+      type: object
+      required:
+        - enabled
+        - filters
+        - action
+      properties:
+        enabled:
+          type: boolean
+        filters:
+          type: object
+          description: |
+            Map of `SpamType` → `SpamInterval`. Keys are `message` or `newline`.
+          additionalProperties:
+            $ref: '#/components/schemas/SpamInterval'
+        bypass:
+          $ref: '#/components/schemas/PermissionOverride'
+        action:
+          type: array
+          description: Escalating actions at increasing violation thresholds.
+          items:
+            $ref: '#/components/schemas/SpamAction'
+      example:
+        enabled: true
+        filters:
+          message:
+            interval: 5000
+            count: 5
+        action:
+          - action: warn
+            duration: 0
+            threshold: 1
+          - action: mute
+            duration: 300000
+            threshold: 3
+
+    AutomodSettings:
+      type: object
+      required:
+        - name
+        - enabled
+      properties:
+        name:
+          type: string
+          description: Human-readable label for this settings block.
+        enabled:
+          type: boolean
+        censors:
+          type: object
+          description: Censor rules keyed by `CensorType` (`word`, `link`, `invite`).
+          additionalProperties:
+            $ref: '#/components/schemas/Censor'
+        spam:
+          $ref: '#/components/schemas/SpamFilter'
+        bypass:
+          $ref: '#/components/schemas/PermissionOverride'
+      example:
+        name: global
+        enabled: true
+        censors:
+          word:
+            enabled: true
+            filters:
+              - '*badword*'
+              - 'spam...'
+            action:
+              action: warn
+              duration: 0
+          invite:
+            enabled: true
+            filters:
+              - abc123
+            action:
+              action: kick
+              duration: 0
+        spam:
+          enabled: true
+          filters:
+            message:
+              interval: 5000
+              count: 5
+          action:
+            - action: warn
+              duration: 0
+              threshold: 1
+            - action: mute
+              duration: 300000
+              threshold: 3
+
+    Automod:
+      type: object
+      properties:
+        global:
+          oneOf:
+            - $ref: '#/components/schemas/AutomodSettings'
+            - type: 'null'
+          description: Applies to all channels without a specific override.
+        channels:
+          type: object
+          description: Per-channel overrides keyed by channel snowflake ID.
+          additionalProperties:
+            $ref: '#/components/schemas/AutomodSettings'
+      example:
+        global:
+          name: global
+          enabled: true
+          censors:
+            word:
+              enabled: true
+              filters:
+                - '*badword*'
+              action:
+                action: warn
+                duration: 0
+        channels:
+          '444555666777888999':
+            name: media-channel
+            enabled: true
+            censors:
+              link:
+                enabled: false
+                filters: []
+                action:
+                  action: warn
+                  duration: 0
 
     Config:
       type: object
@@ -73,70 +380,159 @@ components:
         - inherit_discord_perms
         - alert_on_infraction
         - send_permission_denied
+        - automod_enabled
+        - music_enabled
+        - moderation_enabled
       properties:
         id:
           $ref: '#/components/schemas/Id'
         prefix:
           type: string
           default: '!'
+          description: Command prefix used to trigger bot commands.
         mute_role:
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/Id'
-          nullable: true
+            - type: 'null'
+          description: Role applied by the `mute` command. Required for muting to work.
         default_warn_duration:
-          type: integer
+          type: [integer, 'null']
           format: int64
-          nullable: true
+          description: Default warn expiry in **seconds** when no duration is given to `warn`.
         log_channel:
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/Id'
-          nullable: true
+            - type: 'null'
+          description: Channel where moderation action embeds are posted.
         prefer_embeds:
           type: boolean
           default: false
+          description: Use Discord embed formatting for bot responses where supported.
         inherit_discord_perms:
           type: boolean
           default: true
+          description: Map Discord role permissions (KICK_MEMBERS, BAN_MEMBERS, etc.) to Black Mesa permission flags automatically.
         alert_on_infraction:
           type: boolean
           default: true
+          description: DM the target user when an infraction is issued.
         send_permission_denied:
           type: boolean
           default: true
+          description: Reply with a permission-denied message when a caller lacks access.
+        moderation_enabled:
+          type: boolean
+          default: false
+          description: Enable moderation commands (`kick`, `ban`, `mute`, `warn`, etc.).
+        music_enabled:
+          type: boolean
+          default: false
+          description: Enable music/audio playback commands. Requires a Mesastream instance.
+        automod_enabled:
+          type: boolean
+          default: false
+          description: Enable the automod engine (censor and spam filters).
         permission_groups:
-          type: array
-          nullable: true
-          items:
-            $ref: '#/components/schemas/Group'
+          description: Named permission groups. Each group binds roles/users to a `PermissionBits` value.
+          oneOf:
+            - type: array
+              items:
+                $ref: '#/components/schemas/Group'
+            - type: 'null'
         automod:
-          type: object
-          nullable: true
-          additionalProperties: true
+          oneOf:
+            - $ref: '#/components/schemas/Automod'
+            - type: 'null'
+          description: Automod configuration. Evaluated only when `automod_enabled` is `true`.
         command_aliases:
-          type: object
-          nullable: true
-          additionalProperties:
-            type: string
-
+          description: 'Alias → command mapping, e.g. `{"w": "warn", "u": "unmute"}`.'
+          oneOf:
+            - type: object
+              additionalProperties:
+                type: string
+            - type: 'null'
+      example:
+        id: '123456789012345678'
+        prefix: '!'
+        mute_role: '555666777888999000'
+        default_warn_duration: 604800
+        log_channel: '444555666777888999'
+        prefer_embeds: true
+        inherit_discord_perms: true
+        alert_on_infraction: true
+        send_permission_denied: true
+        moderation_enabled: true
+        music_enabled: false
+        automod_enabled: true
+        permission_groups:
+          - name: moderators
+            roles:
+              - '222333444555666777'
+            users: []
+            permissions: 511
+          - name: admins
+            roles:
+              - '333444555666777888'
+            users:
+              - '987654321098765432'
+            permissions: 268435455
+        automod:
+          global:
+            name: global
+            enabled: true
+            censors:
+              word:
+                enabled: true
+                filters:
+                  - '*badword*'
+                action:
+                  action: warn
+                  duration: 0
+            spam:
+              enabled: true
+              filters:
+                message:
+                  interval: 5000
+                  count: 5
+              action:
+                - action: warn
+                  duration: 0
+                  threshold: 1
+                - action: mute
+                  duration: 300000
+                  threshold: 3
+          channels: {}
+        command_aliases:
+          w: warn
+          u: unmute
+          kb: ban
     UserGuild:
       type: object
+      description: A guild the authenticated user has at least `CONFIG_VIEW` access to.
       required:
         - id
         - name
         - owner
+        - permissions
       properties:
         id:
           $ref: '#/components/schemas/Id'
         name:
           type: string
         icon:
-          type: string
-          nullable: true
+          type: [string, 'null']
+          description: Guild icon hash (use with Discord CDN).
         permissions:
-          type: string
-          nullable: true
+          $ref: '#/components/schemas/PermissionBits'
         owner:
           type: boolean
+          description: Whether the authenticated user is the guild owner.
+      example:
+        id: '123456789012345678'
+        name: My Cool Server
+        icon: a_1a2b3c4d5e6f7a8b9c0d
+        permissions: 393216
+        owner: false
 
     InfractionType:
       type: string
@@ -146,9 +542,36 @@ components:
         - kick
         - ban
 
+    AutomodOffense:
+      type: object
+      description: Populated when an infraction was created by the automod engine.
+      properties:
+        type:
+          type: string
+          description: One of `message-spam`, `newline-spam`, `word-censor`, `link-censor`, `invite-censor`.
+        message:
+          type: string
+          description: The message content that triggered automod.
+        count:
+          type: [integer, 'null']
+          format: int64
+          description: Number of events within the window (spam types only).
+        interval:
+          type: [integer, 'null']
+          format: int64
+          description: Window size in milliseconds (spam types only).
+        offending_filter:
+          type: [string, 'null']
+          description: The specific filter string or domain that matched (censor types only).
+      example:
+        type: message-spam
+        message: 'hey hey hey hey hey hey'
+        count: 6
+        interval: 5000
+        offending_filter: null
+
     Infraction:
       type: object
-      additionalProperties: true
       properties:
         uuid:
           $ref: '#/components/schemas/Uuid'
@@ -161,42 +584,72 @@ components:
         infraction_type:
           $ref: '#/components/schemas/InfractionType'
         reason:
-          type: string
-          nullable: true
-        expires_at:
-          type: integer
+          type: [string, 'null']
+        last_edited:
+          type: [integer, 'null']
           format: int64
-          nullable: true
+          description: Unix timestamp (seconds) of the last edit.
+        expires_at:
+          type: [integer, 'null']
+          format: int64
+          description: Unix timestamp (seconds) when this infraction expires and is automatically deactivated.
+        mute_role_id:
+          oneOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+          description: Role ID that was applied for mute infractions.
+        automod_offense:
+          oneOf:
+            - $ref: '#/components/schemas/AutomodOffense'
+            - type: 'null'
+          description: Set when the infraction was created by the automod engine.
         active:
           type: boolean
+          description: Whether the infraction is currently in effect.
+      example:
+        uuid: c488c9ec-423a-437c-817c-41d0d4141e58
+        guild_id: '123456789012345678'
+        user_id: '987654321098765432'
+        moderator_id: '111222333444555666'
+        infraction_type: ban
+        reason: Repeatedly violated community rules after multiple warnings.
+        active: true
+        expires_at: 1775072000
+        last_edited: null
+        mute_role_id: null
+        automod_offense: null
 
     CreateInfractionRequest:
       type: object
       required:
         - guild_id
         - user_id
-        - moderator_id
         - infraction_type
       properties:
         guild_id:
           $ref: '#/components/schemas/Id'
         user_id:
           $ref: '#/components/schemas/Id'
-        moderator_id:
-          $ref: '#/components/schemas/Id'
         infraction_type:
           $ref: '#/components/schemas/InfractionType'
         reason:
-          type: string
-          nullable: true
+          type: [string, 'null']
         expires_at:
-          type: integer
+          type: [integer, 'null']
           format: int64
-          nullable: true
+          description: Unix timestamp (seconds) when this infraction should expire.
         mute_role_id:
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/Id'
-          nullable: true
+            - type: 'null'
+          description: Required for `mute` type — the role to apply.
+      example:
+        guild_id: '123456789012345678'
+        user_id: '987654321098765432'
+        infraction_type: mute
+        reason: Excessive spamming in #general
+        expires_at: 1775072000
+        mute_role_id: '555666777888999000'
 
     DeactivateResponse:
       type: object
@@ -206,14 +659,18 @@ components:
       properties:
         success:
           type: boolean
-          example: true
         id:
           type: string
+          description: UUID of the deactivated infraction.
+      example:
+        success: true
+        id: c488c9ec-423a-437c-817c-41d0d4141e58
 
 paths:
   /healthz:
     get:
-      summary: Health check endpoint
+      summary: Health check
+      description: Returns `OK` if the service is running. No auth required.
       responses:
         '200':
           description: Service is healthy
@@ -223,15 +680,28 @@ paths:
                 type: string
                 example: OK
 
-  /oauth/discord:
+  /api/oauth/discord:
     get:
       summary: Exchange Discord OAuth code for API JWT
+      description: |
+        Complete the Discord OAuth2 authorization code flow and receive a signed JWT
+        for use with all other API endpoints.
+
+        Redirect your users to Discord's OAuth2 authorization URL, then send the
+        returned `code` to this endpoint.
       parameters:
         - in: query
           name: code
           required: true
           schema:
             type: string
+          description: Authorization code returned by Discord.
+        - in: query
+          name: redirect_uri
+          required: false
+          schema:
+            type: string
+          description: Redirect URI used in the original authorization request. Defaults to the configured value.
       responses:
         '200':
           description: Successfully authenticated
@@ -239,27 +709,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwMTIzNDU2NzgiLCJleHAiOjE3NzUwNzIwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
         '400':
-          description: Invalid request
+          description: Invalid or missing code
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /oauth/refresh:
+  /api/oauth/refresh:
     get:
-      summary: Refresh Discord token and issue a new API JWT
+      summary: Refresh API JWT
+      description: |
+        Issues a fresh JWT for the currently authenticated user without re-running
+        the full OAuth flow. The stored Discord credentials are preserved.
       security:
         - bearerAuth: []
       responses:
         '200':
-          description: Successfully refreshed token
+          description: New JWT issued
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwMTIzNDU2NzgiLCJleHAiOjE3NzUwNzIwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
         '401':
-          description: Unauthorized
+          description: Token is missing or invalid
           content:
             application/json:
               schema:
@@ -267,7 +744,10 @@ paths:
 
   /api/guilds:
     get:
-      summary: List guilds the authenticated user can manage
+      summary: List manageable guilds
+      description: |
+        Returns the guilds where the authenticated user has at least `CONFIG_VIEW` permission.
+        Both Discord role permissions and Black Mesa permission groups are considered.
       security:
         - bearerAuth: []
       responses:
@@ -279,6 +759,17 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/UserGuild'
+              example:
+                - id: '123456789012345678'
+                  name: My Cool Server
+                  icon: a_1a2b3c4d5e6f7a8b9c0d
+                  permissions: 393216
+                  owner: false
+                - id: '999888777666555444'
+                  name: Test Guild
+                  icon: null
+                  permissions: 131072
+                  owner: true
         '401':
           description: Unauthorized
           content:
@@ -291,10 +782,12 @@ paths:
       - in: path
         name: id
         required: true
+        description: Guild snowflake ID.
         schema:
           $ref: '#/components/schemas/Id'
     get:
       summary: Get guild configuration
+      description: Returns the full `Config` document for the guild. Requires `CONFIG_VIEW`.
       security:
         - bearerAuth: []
       responses:
@@ -311,13 +804,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
         '404':
-          description: Config not found
+          description: Config not found (guild not set up)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
     post:
       summary: Update guild configuration
+      description: |
+        Replaces the guild configuration. The `id` field in the body must match the path
+        parameter. Requires `CONFIG_EDIT`.
+
+        Permission groups are synced atomically: the existing groups for the guild are
+        deleted and replaced with the groups provided in the request body.
       security:
         - bearerAuth: []
       requestBody:
@@ -326,6 +825,28 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/Config'
+            example:
+              id: '123456789012345678'
+              prefix: '!'
+              mute_role: '555666777888999000'
+              default_warn_duration: 604800
+              log_channel: '444555666777888999'
+              prefer_embeds: true
+              inherit_discord_perms: true
+              alert_on_infraction: true
+              send_permission_denied: true
+              moderation_enabled: true
+              music_enabled: false
+              automod_enabled: false
+              permission_groups:
+                - name: moderators
+                  roles:
+                    - '222333444555666777'
+                  users: []
+                  permissions: 511
+              command_aliases:
+                w: warn
+                u: unmute
       responses:
         '200':
           description: Updated config
@@ -334,7 +855,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Config'
         '400':
-          description: Validation error
+          description: Validation error or ID mismatch
           content:
             application/json:
               schema:
@@ -345,10 +866,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Config not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/infractions/{guild_id}:
     get:
       summary: List or search infractions for a guild
+      description: |
+        Returns infractions for a guild. Supports optional filtering by user, type, and
+        active status. Requires `INFRACTION_VIEW`.
       security:
         - bearerAuth: []
       parameters:
@@ -360,16 +890,19 @@ paths:
         - in: query
           name: user_id
           required: false
+          description: Filter to a specific user.
           schema:
             $ref: '#/components/schemas/Id'
         - in: query
           name: type
           required: false
+          description: Filter by infraction type.
           schema:
             $ref: '#/components/schemas/InfractionType'
         - in: query
           name: active
           required: false
+          description: Filter by active status.
           schema:
             type: string
             enum: ['true', 'false']
@@ -382,6 +915,34 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Infraction'
+              example:
+                - uuid: c488c9ec-423a-437c-817c-41d0d4141e58
+                  guild_id: '123456789012345678'
+                  user_id: '987654321098765432'
+                  moderator_id: '111222333444555666'
+                  infraction_type: ban
+                  reason: Repeatedly violated community rules.
+                  active: true
+                  expires_at: 1775072000
+                  last_edited: null
+                  mute_role_id: null
+                  automod_offense: null
+                - uuid: d599daf1-534b-548d-928d-52e1e5252f69
+                  guild_id: '123456789012345678'
+                  user_id: '444555666777888999'
+                  moderator_id: null
+                  infraction_type: warn
+                  reason: Spamming in #general
+                  active: true
+                  expires_at: null
+                  last_edited: null
+                  mute_role_id: null
+                  automod_offense:
+                    type: message-spam
+                    message: 'hey hey hey hey hey'
+                    count: 6
+                    interval: 5000
+                    offending_filter: null
         '400':
           description: Invalid query or guild ID
           content:
@@ -394,10 +955,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Config not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/infractions:
     post:
       summary: Create a new infraction
+      description: |
+        Creates an infraction record. The `moderator_id` is automatically set to the
+        authenticated user's ID (the request body `moderator_id` field is ignored).
+        Requires `INFRACTION_EDIT`.
       security:
         - bearerAuth: []
       requestBody:
@@ -406,6 +977,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateInfractionRequest'
+            example:
+              guild_id: '123456789012345678'
+              user_id: '987654321098765432'
+              infraction_type: mute
+              reason: Excessive spamming in #general
+              expires_at: 1775072000
+              mute_role_id: '555666777888999000'
       responses:
         '200':
           description: Created infraction
@@ -425,10 +1003,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Config not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/infractions/{guild_id}/{id}/deactivate:
     post:
       summary: Deactivate an infraction
+      description: |
+        Marks an infraction as inactive (pardons it).  Returns `400` if the infraction
+        is already inactive. Requires `INFRACTION_EDIT`.
       security:
         - bearerAuth: []
       parameters:
@@ -444,13 +1031,16 @@ paths:
             $ref: '#/components/schemas/Uuid'
       responses:
         '200':
-          description: Deactivation status
+          description: Infraction deactivated
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeactivateResponse'
+              example:
+                success: true
+                id: c488c9ec-423a-437c-817c-41d0d4141e58
         '400':
-          description: Invalid ID or already inactive
+          description: Invalid ID or infraction already inactive
           content:
             application/json:
               schema:
@@ -467,3 +1057,4 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+

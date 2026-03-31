@@ -20,12 +20,13 @@ pub async fn get_config(
         None => return Err(ApiError::NotFound("Config not found".to_string())),
     };
 
-    let guild = state.get_guild(&id).await?.ok_or_else(|| {
-        ApiError::NotFound("Guild not found".into())
-    })?;
+    let guild = state
+        .get_guild(&id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
     if !state
-        .check_permission(&config, Some(&guild), &user, Permission::ConfigView)
+        .check_permission(&config, Some(&guild), &user, Permission::CONFIG_VIEW)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".to_string()));
@@ -43,8 +44,9 @@ pub async fn post_config(
     user: AuthenticatedUser,
 ) -> Result<web::Json<Config>, ApiError> {
     let id = Id::from_str(&id).map_err(|_| ApiError::ParseError("Invalid ID".to_string()))?;
+    let update = config.into_inner();
 
-    if id != config.id {
+    if id != update.id {
         return Err(ApiError::BadRequest(
             "ID in path does not match ID in body".to_string(),
         ));
@@ -55,18 +57,19 @@ pub async fn post_config(
         None => return Err(ApiError::NotFound("Config not found".to_string())),
     };
 
-    let guild = state.get_guild(&id).await?.ok_or_else(|| {
-        ApiError::NotFound("Guild not found".into())
-    })?;
+    let guild = state
+        .get_guild(&id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
     if !state
-        .check_permission(&config, Some(&guild), &user, Permission::ConfigEdit)
+        .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".to_string()));
     }
 
-    state.update_config(&id, &config).await?;
+    let updated = state.update_config(&id, &update).await?;
 
-    Ok(web::Json(config))
+    Ok(web::Json(updated))
 }

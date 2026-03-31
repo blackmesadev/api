@@ -49,12 +49,13 @@ pub async fn get_infractions(
         ApiError::NotFound("Config not found — guild may not be set up yet".into())
     })?;
 
-    let guild = state.get_guild(&guild_id).await?.ok_or_else(|| {
-        ApiError::NotFound("Guild not found".into())
-    })?;
+    let guild = state
+        .get_guild(&guild_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
     if !state
-        .check_permission(&config, Some(&guild), &user, Permission::InfractionView)
+        .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_VIEW)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".into()));
@@ -112,11 +113,15 @@ pub async fn create_infraction(
         .await?
         .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
 
-    let guild = state.get_guild(&guild_id).await?.ok_or_else(|| {
-        ApiError::NotFound("Guild not found".into())
-    })?;
+    let guild = state
+        .get_guild(&guild_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
-    if !state.check_permission(&config, Some(&guild), &user, Permission::InfractionEdit).await? {
+    if !state
+        .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_EDIT)
+        .await?
+    {
         return Err(ApiError::Auth("Insufficient permissions".into()));
     }
 
@@ -164,12 +169,13 @@ pub async fn deactivate_infraction(
         .await?
         .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
 
-    let guild = state.get_guild(&guild_id).await?.ok_or_else(|| {
-        ApiError::NotFound("Guild not found".into())
-    })?;
+    let guild = state
+        .get_guild(&guild_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
     if !state
-        .check_permission(&config, Some(&guild), &user, Permission::InfractionEdit)
+        .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_EDIT)
         .await?
     {
         return Err(ApiError::Auth("Insufficient permissions".into()));

@@ -1,7 +1,7 @@
 mod api;
 mod auth;
-mod data;
 mod config;
+mod data;
 mod discord;
 mod error;
 mod guilds;
@@ -10,11 +10,12 @@ mod jwt;
 mod permissions;
 mod telemetry;
 
-use actix_web::{get, web::Data, App, HttpServer};
 use actix_cors::Cors;
+use actix_web::{get, web::Data, App, HttpServer};
 use bm_lib::{
     cache::{Cache, RedisCache},
-    db::Database, discord::DiscordRestClient,
+    db::Database,
+    discord::DiscordRestClient,
 };
 use config::Settings;
 use discord::RestClient;
@@ -49,9 +50,12 @@ impl State {
                     .expect("Failed to connect to Redis"),
             ),
             bot_cache: Cache::new(
-                RedisCache::new(settings.redis_uri.clone(), settings.bot_redis_prefix.clone())
-                    .await
-                    .expect("Failed to connect to bot Redis namespace"),
+                RedisCache::new(
+                    settings.redis_uri.clone(),
+                    settings.bot_redis_prefix.clone(),
+                )
+                .await
+                .expect("Failed to connect to bot Redis namespace"),
             ),
             rest: RestClient::new(
                 settings.discord_client_id.clone(),

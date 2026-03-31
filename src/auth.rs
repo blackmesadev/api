@@ -129,7 +129,7 @@ pub async fn refresh_token(
         user.discord_expires_in,
         &state.jwt_secret,
     )
-        .map_err(|e| ApiError::Internal(format!("Failed to create token: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("Failed to create token: {e}")))?;
 
     Ok(web::Json(AuthResponse { token }))
 }
