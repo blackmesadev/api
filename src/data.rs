@@ -84,12 +84,12 @@ impl State {
     #[instrument(skip(self))]
     pub async fn get_member_guilds(&self, user_id: &Id) -> Result<HashSet<Id>, ApiError> {
         let key = member_guilds_cache_key(user_id);
-        Ok(self
+        let members: Vec<Id> = self
             .bot_cache
-            .get::<String, HashSet<Id>>(&key)
+            .smembers(&key)
             .await
-            .map_err(ApiError::from)?
-            .unwrap_or_default())
+            .map_err(ApiError::from)?;
+        Ok(members.into_iter().collect())
     }
 
     /// Returns every role ID the user holds across all guilds the bot knows

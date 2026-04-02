@@ -20,10 +20,9 @@ pub struct UserGuild {
 /// Strategy (no full guild iteration, no keyspace scan):
 /// 1. Read `member_guilds:{user_id}` — O(1) Redis GET — to get the exact set
 ///    of guild IDs the bot knows the user is in.
-/// 2. For each of those guilds fetch `roles:{guild_id}:{user_id}` (pipelined,
-///    O(m) where m = guild count, typically < 100).
-/// 3. Single DB query bounded by `guild_id = ANY(known_guilds)`.
-/// 4. Fetch guild/config and compute real permissions per result.
+/// 2. For each guild, fetch guild + config from cache/DB (O(m) where m = guild count).
+/// 3. Resolve Discord + DB permissions for each guild using permission inheritance.
+/// 4. Return only guilds where user has CONFIG_VIEW permission (includes Discord admins).
 #[get("/api/guilds")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_guilds(
@@ -33,27 +32,16 @@ pub async fn get_guilds(
     // O(1): single Redis GET for the user's guild membership reverse index.
     let member_guild_ids = state.get_member_guilds(&user.user_id).await?;
 
-    // O(m) pipelined: fetch the role IDs the user holds in each guild.
-    let all_role_ids = state
-        .get_all_member_roles(&user.user_id, &member_guild_ids)
-        .await?;
+    let mut member_guild_ids_log: Vec<String> =
+        member_guild_ids.iter().map(|id| id.to_string()).collect();
+    member_guild_ids_log.sort();
+    tracing::info!("user in {}", member_guild_ids_log.join(", "));
 
-    let guild_ids_vec: Vec<_> = member_guild_ids.iter().copied().collect();
-    let role_ids_vec: Vec<_> = all_role_ids.into_iter().collect();
+    let mut guilds = Vec::new();
 
-    // DB query bounded to the known guild set — no full permissions-table scan.
-    let guild_ids = state
-        .db
-        .list_guilds_for_user(
-            &user.user_id,
-            &guild_ids_vec,
-            &role_ids_vec,
-            Permission::CONFIG_VIEW,
-        )
-        .await?;
-
-    let mut guilds = Vec::with_capacity(guild_ids.len());
-    for guild_id in &guild_ids {
+    // Check permissions for each guild the user is a member of.
+    // This respects both Discord permissions (admin, etc.) and Black Mesa permission groups.
+    for guild_id in &member_guild_ids {
         let Some(guild) = state.get_guild(guild_id).await? else {
             continue;
         };
@@ -61,17 +49,41 @@ pub async fn get_guilds(
             continue;
         };
 
-        let perms = state
+        // Guild owner always has access
+        if guild.owner_id == Some(user.user_id) {
+            guilds.push(UserGuild {
+                id: guild_id.to_string(),
+                name: guild.name.to_string(),
+                icon: guild.icon.map(|s| s.to_string()),
+                permissions: Permission::all(),
+                owner: true,
+            });
+            continue;
+        }
+
+        // Resolve full permissions (Discord + Black Mesa permission groups)
+        let perms = match state
             .resolve_member_permissions(&config, &guild, &user.user_id)
             .await
-            .unwrap_or(Permission::CONFIG_VIEW);
+        {
+            Ok(perms) => perms,
+            Err(e) => {
+                tracing::warn!(guild_id = %guild_id, error = ?e, "Failed to resolve permissions");
+                continue;
+            }
+        };
+
+        // Only include guilds where user has CONFIG_VIEW permission
+        if !perms.has_permission(Permission::CONFIG_VIEW) {
+            continue;
+        }
 
         guilds.push(UserGuild {
             id: guild_id.to_string(),
             name: guild.name.to_string(),
             icon: guild.icon.map(|s| s.to_string()),
             permissions: perms,
-            owner: guild.owner_id == Some(user.user_id),
+            owner: false,
         });
     }
 
