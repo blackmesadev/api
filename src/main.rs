@@ -7,6 +7,7 @@ mod error;
 mod guilds;
 mod infractions;
 mod jwt;
+mod logging;
 mod permissions;
 mod telemetry;
 
@@ -99,10 +100,17 @@ async fn main() -> std::io::Result<()> {
             .service(api::post_config)
             // Guilds
             .service(guilds::get_guilds)
+            .service(guilds::get_guild_channels)
+            .service(guilds::get_guild_roles)
             // Infractions
             .service(infractions::get_infractions)
             .service(infractions::create_infraction)
             .service(infractions::deactivate_infraction)
+            // Logging
+            .service(logging::get_log_configs)
+            .service(logging::upsert_log_config)
+            .service(logging::bulk_upsert_log_configs)
+            .service(logging::delete_log_config)
             .app_data(state.clone())
     })
     .bind((settings.api_host.clone(), settings.api_port))?

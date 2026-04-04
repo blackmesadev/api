@@ -73,4 +73,31 @@ impl State {
         tracing::debug!("Permission check failed");
         Ok(false)
     }
+
+    /// Fetch guild + config from cache and verify the user has the given permission.
+    /// Returns `ApiError::NotFound` if guild/config is missing, `ApiError::Auth` if denied.
+    pub async fn require_guild_permission(
+        &self,
+        user: &AuthenticatedUser,
+        guild_id: &bm_lib::discord::Id,
+        perm: Permission,
+    ) -> Result<(), ApiError> {
+        let guild = self
+            .get_guild(guild_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
+        let config = self
+            .get_config(guild_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
+
+        if !self
+            .check_permission(&config, Some(&guild), user, perm)
+            .await?
+        {
+            return Err(ApiError::Auth("Insufficient permissions".into()));
+        }
+
+        Ok(())
+    }
 }

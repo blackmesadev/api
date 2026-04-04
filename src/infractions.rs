@@ -27,12 +27,12 @@ pub struct CreateInfractionRequest {
     pub mute_role_id: Option<String>,
 }
 
-/// `GET /api/infractions/{guild_id}` — list / search infractions for a guild.
+/// `GET /api/infractions/{guild_id}` - list / search infractions for a guild.
 ///
 /// Optional query parameters:
-///   - `user_id`  — filter by user
-///   - `type`     — filter by infraction type (warn/mute/kick/ban)
-///   - `active`   — `"true"` or `"false"`
+///   - `user_id`  - filter by user
+///   - `type`     - filter by infraction type (warn/mute/kick/ban)
+///   - `active`   - `"true"` or `"false"`
 #[get("/api/infractions/{guild_id}")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_infractions(
@@ -44,9 +44,9 @@ pub async fn get_infractions(
     let guild_id =
         Id::from_str(&guild_id).map_err(|_| ApiError::ParseError("Invalid guild ID".into()))?;
 
-    // Permission check — require infraction view access.
+    // Permission check - require infraction view access.
     let config = state.get_config(&guild_id).await?.ok_or_else(|| {
-        ApiError::NotFound("Config not found — guild may not be set up yet".into())
+        ApiError::NotFound("Config not found - guild may not be set up yet".into())
     })?;
 
     let guild = state
@@ -90,7 +90,7 @@ pub async fn get_infractions(
     Ok(web::Json(infractions))
 }
 
-/// `POST /api/infractions` — create a new infraction.
+/// `POST /api/infractions` - create a new infraction.
 #[post("/api/infractions")]
 #[instrument(skip(state, user, body), fields(user_id = %user.user_id))]
 pub async fn create_infraction(
@@ -107,7 +107,7 @@ pub async fn create_infraction(
     let infraction_type = InfractionType::from_str(&body.infraction_type)
         .ok_or_else(|| ApiError::ParseError("Invalid infraction_type".into()))?;
 
-    // Permission check — require infraction edit access.
+    // Permission check - require infraction edit access.
     let config = state
         .get_config(&guild_id)
         .await?
@@ -148,7 +148,7 @@ pub async fn create_infraction(
     Ok(web::Json(infraction))
 }
 
-/// `POST /api/infractions/{guild_id}/{id}/deactivate` — deactivate an infraction.
+/// `POST /api/infractions/{guild_id}/{id}/deactivate` - deactivate an infraction.
 #[post("/api/infractions/{guild_id}/{id}/deactivate")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn deactivate_infraction(

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::error::ApiError;
 use bm_lib::{
-    discord::{Guild, Id},
+    discord::{Channel, Guild, Id},
     model::Config,
 };
 use tracing::instrument;
@@ -25,6 +25,11 @@ fn roles_cache_key(guild_id: &Id, user_id: &Id) -> String {
 #[inline]
 fn member_guilds_cache_key(user_id: &Id) -> String {
     format!("member_guilds:{}", user_id)
+}
+
+#[inline]
+fn channels_cache_key(guild_id: &Id) -> String {
+    format!("channels:{}", guild_id)
 }
 
 impl State {
@@ -66,6 +71,28 @@ impl State {
     }
 
     #[instrument(skip(self))]
+    pub async fn get_channels(&self, guild_id: &Id) -> Result<Option<Vec<Channel>>, ApiError> {
+        let key = channels_cache_key(guild_id);
+        self.bot_cache
+            .get::<String, Vec<Channel>>(&key)
+            .await
+            .map_err(ApiError::from)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn set_channels(
+        &self,
+        guild_id: &Id,
+        channels: &Vec<Channel>,
+    ) -> Result<(), ApiError> {
+        let key = channels_cache_key(guild_id);
+        self.bot_cache
+            .set(&key, channels, Some(CONFIG_TTL))
+            .await
+            .map_err(ApiError::from)
+    }
+
+    #[instrument(skip(self))]
     pub async fn get_member_roles(
         &self,
         guild_id: &Id,
@@ -80,7 +107,7 @@ impl State {
 
     /// Returns the set of guild IDs the bot has observed this user in, using
     /// the `member_guilds:{user_id}` reverse index written by the bot on every
-    /// `GuildMemberUpdate` event.  O(1) — no keyspace scan.
+    /// `GuildMemberUpdate` event.  O(1) - no keyspace scan.
     #[instrument(skip(self))]
     pub async fn get_member_guilds(&self, user_id: &Id) -> Result<HashSet<Id>, ApiError> {
         let key = member_guilds_cache_key(user_id);

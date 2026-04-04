@@ -10,7 +10,7 @@ info:
     ID and OAuth tokens and is validated on every request.
 
     **Permission model**: each protected endpoint checks a specific
-    `PermissionSet` flag against the caller.  Flags are a `u64` bitfield —
+    `PermissionSet` flag against the caller.  Flags are a `u64` bitfield -
     see the [Permissions docs](https://docs.blackmesa.bot/bot/permissions/)
     for a full flag reference.
 
@@ -642,7 +642,7 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Id'
             - type: 'null'
-          description: Required for `mute` type — the role to apply.
+          description: Required for `mute` type - the role to apply.
       example:
         guild_id: '123456789012345678'
         user_id: '987654321098765432'
