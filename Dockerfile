@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ./lib /app/lib
+# COPY ./lib /app/lib
+
 COPY ./api/Cargo.toml ./api/Cargo.lock ./
 COPY ./api/src/main.rs ./src/main.rs
 
