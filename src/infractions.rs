@@ -30,9 +30,9 @@ pub struct CreateInfractionRequest {
 /// `GET /api/infractions/{guild_id}` - list / search infractions for a guild.
 ///
 /// Optional query parameters:
-///   - `user_id`  - filter by user
-///   - `type`     - filter by infraction type (warn/mute/kick/ban)
-///   - `active`   - `"true"` or `"false"`
+/// - `user_id`  - filter by user
+/// - `type`     - filter by infraction type (warn/mute/kick/ban)
+/// - `active`   - `"true"` or `"false"`
 #[get("/api/infractions/{guild_id}")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_infractions(
@@ -58,7 +58,7 @@ pub async fn get_infractions(
         .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_VIEW)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     let user_id = query
@@ -122,7 +122,7 @@ pub async fn create_infraction(
         .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     let mute_role_id = body
@@ -178,7 +178,7 @@ pub async fn deactivate_infraction(
         .check_permission(&config, Some(&guild), &user, Permission::INFRACTION_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     // Verify the infraction belongs to this guild before deactivating.

@@ -36,7 +36,7 @@ pub struct UserGuild {
 ///
 /// Strategy (no full guild iteration, no keyspace scan):
 /// 1. Read `member_guilds:{user_id}` - O(1) Redis GET - to get the exact set
-///    of guild IDs the bot knows the user is in.
+///  of guild IDs the bot knows the user is in.
 /// 2. For each guild, fetch guild + config from cache/DB (O(m) where m = guild count).
 /// 3. Resolve Discord + DB permissions for each guild using permission inheritance.
 /// 4. Return only guilds where user has CONFIG_VIEW permission (includes Discord admins).

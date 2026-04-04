@@ -18,6 +18,9 @@ pub enum ApiError {
     #[error("Authentication error: {0}")]
     Auth(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     #[error("Invalid request: {0}")]
     BadRequest(String),
 
@@ -32,6 +35,7 @@ impl ResponseError for ApiError {
     fn error_response(&self) -> HttpResponse {
         match self {
             ApiError::Auth(_) => HttpResponse::Unauthorized().json(self.to_string()),
+            ApiError::Forbidden(_) => HttpResponse::Forbidden().json(self.to_string()),
             ApiError::BadRequest(_) => HttpResponse::BadRequest().json(self.to_string()),
             ApiError::NotFound(_) => HttpResponse::NotFound().json(self.to_string()),
             ApiError::ParseError(_) => HttpResponse::BadRequest().json(self.to_string()),

@@ -34,7 +34,7 @@ pub async fn get_log_configs(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_VIEW)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     let configs = state.db.get_log_configs(&guild_id).await?;
@@ -80,7 +80,7 @@ pub async fn upsert_log_config(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     // Validate event type
@@ -147,7 +147,7 @@ pub async fn bulk_upsert_log_configs(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     let mut log_configs = Vec::with_capacity(body.configs.len());
@@ -214,7 +214,7 @@ pub async fn delete_log_config(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".into()));
+        return Err(ApiError::Forbidden("Insufficient permissions".into()));
     }
 
     let deleted = state.db.delete_log_config(&guild_id, &event).await?;

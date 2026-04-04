@@ -29,7 +29,7 @@ pub async fn get_config(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_VIEW)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".to_string()));
+        return Err(ApiError::Forbidden("Insufficient permissions".to_string()));
     }
 
     Ok(web::Json(config))
@@ -66,7 +66,7 @@ pub async fn post_config(
         .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
         .await?
     {
-        return Err(ApiError::Auth("Insufficient permissions".to_string()));
+        return Err(ApiError::Forbidden("Insufficient permissions".to_string()));
     }
 
     let updated = state.update_config(&id, &update).await?;

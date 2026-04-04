@@ -95,7 +95,7 @@ impl State {
             .check_permission(&config, Some(&guild), user, perm)
             .await?
         {
-            return Err(ApiError::Auth("Insufficient permissions".into()));
+            return Err(ApiError::Forbidden("Insufficient permissions".into()));
         }
 
         Ok(())
