@@ -20,22 +20,9 @@ pub async fn get_log_configs(
     let guild_id =
         Id::from_str(&guild_id).map_err(|_| ApiError::ParseError("Invalid guild ID".into()))?;
 
-    let config = state
-        .get_config(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
-
-    let guild = state
-        .get_guild(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
-
-    if !state
-        .check_permission(&config, Some(&guild), &user, Permission::CONFIG_VIEW)
-        .await?
-    {
-        return Err(ApiError::Forbidden("Insufficient permissions".into()));
-    }
+    state
+        .require_guild_permission(&user, &guild_id, Permission::CONFIG_VIEW)
+        .await?;
 
     let configs = state.db.get_log_configs(&guild_id).await?;
     Ok(web::Json(configs))
@@ -66,22 +53,9 @@ pub async fn upsert_log_config(
     let guild_id =
         Id::from_str(&guild_id).map_err(|_| ApiError::ParseError("Invalid guild ID".into()))?;
 
-    let config = state
-        .get_config(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
-
-    let guild = state
-        .get_guild(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
-
-    if !state
-        .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
-        .await?
-    {
-        return Err(ApiError::Forbidden("Insufficient permissions".into()));
-    }
+    state
+        .require_guild_permission(&user, &guild_id, Permission::CONFIG_EDIT)
+        .await?;
 
     // Validate event type
     if LogEventType::from_db_key(&body.event).is_none() {
@@ -133,22 +107,9 @@ pub async fn bulk_upsert_log_configs(
     let guild_id =
         Id::from_str(&guild_id).map_err(|_| ApiError::ParseError("Invalid guild ID".into()))?;
 
-    let config = state
-        .get_config(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Config not found".into()))?;
-
-    let guild = state
-        .get_guild(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
-
-    if !state
-        .check_permission(&config, Some(&guild), &user, Permission::CONFIG_EDIT)
-        .await?
-    {
-        return Err(ApiError::Forbidden("Insufficient permissions".into()));
-    }
+    state
+        .require_guild_permission(&user, &guild_id, Permission::CONFIG_EDIT)
+        .await?;
 
     let mut log_configs = Vec::with_capacity(body.configs.len());
     for req in &body.configs {

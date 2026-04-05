@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use crate::discord::DiscordUser;
 use crate::error::ApiError;
 use bm_lib::{
     discord::{Channel, Guild, Id},
@@ -11,6 +12,12 @@ use tracing::instrument;
 use crate::State;
 
 const CONFIG_TTL: Duration = Duration::from_secs(60);
+const USER_TTL: Duration = Duration::from_secs(600);
+
+#[inline]
+fn user_cache_key(user_id: &Id) -> String {
+    format!("user:{}", user_id)
+}
 
 #[inline]
 fn guild_cache_key(guild_id: &Id) -> String {
@@ -33,6 +40,24 @@ fn channels_cache_key(guild_id: &Id) -> String {
 }
 
 impl State {
+    #[instrument(skip(self))]
+    pub async fn get_user(&self, user_id: &Id) -> Result<Option<DiscordUser>, ApiError> {
+        let key = user_cache_key(user_id);
+        self.cache
+            .get::<String, DiscordUser>(&key)
+            .await
+            .map_err(ApiError::from)
+    }
+
+    #[instrument(skip(self, user))]
+    pub async fn set_user(&self, user_id: &Id, user: &DiscordUser) -> Result<(), ApiError> {
+        let key = user_cache_key(user_id);
+        self.cache
+            .set(&key, user, Some(USER_TTL))
+            .await
+            .map_err(ApiError::from)
+    }
+
     #[instrument(skip(self))]
     pub async fn get_guild(&self, guild_id: &Id) -> Result<Option<Guild>, ApiError> {
         let key = guild_cache_key(guild_id);

@@ -8,6 +8,7 @@ use std::pin::Pin;
 use tracing::instrument;
 
 use crate::{
+    discord::DiscordUser,
     jwt::{self, Claims},
     State,
 };
@@ -95,12 +96,16 @@ pub async fn oauth_discord(
 
     let me = state.rest.get_self(&oauth_response.access_token).await?;
 
-    let id = me["id"]
-        .as_str()
-        .ok_or_else(|| ApiError::Internal("ID not found in response".to_string()))?;
+    let id: Id = me
+        .id
+        .parse()
+        .map_err(|_| ApiError::Internal("Invalid user ID from Discord".into()))?;
+
+    // Cache the user profile so /api/me doesn't need to hit Discord.
+    state.set_user(&id, &me).await?;
 
     let token = jwt::create_token(
-        id,
+        &id.to_string(),
         &oauth_response.access_token,
         &oauth_response.refresh_token,
         &oauth_response.token_type,
@@ -111,6 +116,28 @@ pub async fn oauth_discord(
     .map_err(|e| ApiError::Internal(format!("Failed to create token: {e}")))?;
 
     Ok(web::Json(AuthResponse { token }))
+}
+
+/// `GET /api/me` - return the authenticated user's profile.
+/// Served from cache (TTL 10 min); falls back to Discord REST on cache miss.
+#[get("/api/me")]
+#[instrument(skip(state, user), fields(user_id = %user.user_id))]
+pub async fn get_me(
+    state: web::Data<State>,
+    user: AuthenticatedUser,
+) -> Result<web::Json<DiscordUser>, ApiError> {
+    if let Some(cached) = state.get_user(&user.user_id).await? {
+        return Ok(web::Json(cached));
+    }
+
+    let me = state
+        .rest
+        .get_self(&user.discord_token)
+        .await
+        .map_err(ApiError::Discord)?;
+
+    state.set_user(&user.user_id, &me).await?;
+    Ok(web::Json(me))
 }
 
 #[get("/api/oauth/refresh")]

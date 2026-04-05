@@ -514,6 +514,12 @@ components:
         - name
         - owner
         - permissions
+        - permission_groups
+        - infraction_count
+        - active_infraction_count
+        - automod_enabled
+        - moderation_enabled
+        - music_enabled
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -527,12 +533,182 @@ components:
         owner:
           type: boolean
           description: Whether the authenticated user is the guild owner.
+        highest_role:
+          type: [string, 'null']
+          description: Name of the user's highest Discord role by position, if available.
+        permission_groups:
+          type: array
+          items:
+            type: string
+          description: Black Mesa permission group names the user belongs to in this guild.
+        member_count:
+          type: [integer, 'null']
+          format: int32
+          description: Approximate member count from the cached guild object.
+        infraction_count:
+          type: integer
+          format: int64
+          description: Total number of infractions in this guild.
+        active_infraction_count:
+          type: integer
+          format: int64
+          description: Number of currently active infractions in this guild.
+        automod_enabled:
+          type: boolean
+          description: Whether the automod module is enabled.
+        moderation_enabled:
+          type: boolean
+          description: Whether the moderation module is enabled.
+        music_enabled:
+          type: boolean
+          description: Whether the music module is enabled.
       example:
         id: '123456789012345678'
         name: My Cool Server
         icon: a_1a2b3c4d5e6f7a8b9c0d
         permissions: 393216
         owner: false
+        highest_role: Moderator
+        permission_groups:
+          - moderators
+        member_count: 1500
+        infraction_count: 42
+        active_infraction_count: 3
+        automod_enabled: true
+        moderation_enabled: true
+        music_enabled: false
+
+    DiscordUser:
+      type: object
+      description: Stripped-down Discord user profile from `GET /users/@me`.
+      required:
+        - id
+        - username
+        - discriminator
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        username:
+          type: string
+          description: The user's Discord username.
+        discriminator:
+          type: string
+          description: Four-digit legacy discriminator, or `"0"` for users on the new username system.
+        global_name:
+          type: [string, 'null']
+          description: The user's display name on the new username system.
+        avatar:
+          type: [string, 'null']
+          description: Avatar hash (use with Discord CDN).
+        email:
+          type: [string, 'null']
+          description: Email address (only present if the `email` OAuth scope was granted).
+      example:
+        id: '123456789012345678'
+        username: exampleuser
+        discriminator: '0'
+        global_name: Example User
+        avatar: a_1a2b3c4d5e6f7a8b9c0d
+        email: null
+
+    Channel:
+      type: object
+      description: A Discord channel object as cached by the bot.
+      required:
+        - id
+        - name
+        - type
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        guild_id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        type:
+          type: integer
+          description: |
+            Discord channel type integer. Common values:
+            - `0` = GUILD_TEXT
+            - `2` = GUILD_VOICE
+            - `4` = GUILD_CATEGORY
+            - `5` = GUILD_ANNOUNCEMENT
+            - `15` = GUILD_FORUM
+        topic:
+          type: [string, 'null']
+        position:
+          type: [integer, 'null']
+          format: int16
+        nsfw:
+          type: [boolean, 'null']
+        last_message_id:
+          $ref: '#/components/schemas/Id'
+        parent_id:
+          $ref: '#/components/schemas/Id'
+        rate_limit_per_user:
+          type: [integer, 'null']
+          format: int16
+      example:
+        id: '444555666777888999'
+        guild_id: '123456789012345678'
+        name: general
+        type: 0
+        position: 1
+        nsfw: false
+        parent_id: '333444555666777888'
+
+    Role:
+      type: object
+      description: A Discord role object.
+      required:
+        - id
+        - name
+        - color
+        - hoist
+        - position
+        - permissions
+        - managed
+        - mentionable
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        color:
+          type: integer
+          format: int32
+          description: Integer representation of the role color.
+        hoist:
+          type: boolean
+          description: Whether members with this role are shown separately in the member list.
+        position:
+          type: integer
+          format: int32
+          description: Role position (higher = higher in hierarchy).
+        permissions:
+          type: string
+          description: Bitfield string of Discord permissions granted by this role.
+        managed:
+          type: boolean
+          description: Whether this role is managed by an integration.
+        mentionable:
+          type: boolean
+          description: Whether this role can be mentioned.
+        icon:
+          type: [string, 'null']
+          description: Role icon hash.
+        unicode_emoji:
+          type: [string, 'null']
+          description: Unicode emoji used as the role icon.
+      example:
+        id: '222333444555666777'
+        name: Moderator
+        color: 3447003
+        hoist: true
+        position: 5
+        permissions: '70508346855744'
+        managed: false
+        mentionable: true
 
     InfractionType:
       type: string
@@ -742,7 +918,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /api/guilds:
+  /api/me:
+    get:
+      summary: Get current user profile
+      description: |
+        Returns the authenticated user's Discord profile. Served from cache
+        (10-minute TTL); falls back to the Discord REST API on a cache miss.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordUser'
+              example:
+                id: '123456789012345678'
+                username: exampleuser
+                discriminator: '0'
+                global_name: Example User
+                avatar: a_1a2b3c4d5e6f7a8b9c0d
+                email: null
+        '401':
+          description: Token is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/me/guilds:
     get:
       summary: List manageable guilds
       description: |
@@ -765,13 +970,137 @@ paths:
                   icon: a_1a2b3c4d5e6f7a8b9c0d
                   permissions: 393216
                   owner: false
+                  highest_role: Moderator
+                  permission_groups:
+                    - moderators
+                  member_count: 1500
+                  infraction_count: 42
+                  active_infraction_count: 3
+                  automod_enabled: true
+                  moderation_enabled: true
+                  music_enabled: false
                 - id: '999888777666555444'
                   name: Test Guild
                   icon: null
                   permissions: 131072
                   owner: true
+                  highest_role: null
+                  permission_groups: []
+                  member_count: 10
+                  infraction_count: 0
+                  active_infraction_count: 0
+                  automod_enabled: false
+                  moderation_enabled: false
+                  music_enabled: false
         '401':
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/me/guilds/{id}/channels:
+    get:
+      summary: List channels for a guild
+      description: |
+        Returns the channel list for the specified guild. Results are served from
+        cache where available; on a cache miss the bot's Discord connection is
+        queried and the result is stored for future requests.
+        Requires `CONFIG_VIEW`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Guild snowflake ID.
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: Channel list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Channel'
+              example:
+                - id: '444555666777888999'
+                  guild_id: '123456789012345678'
+                  name: general
+                  type: 0
+                  position: 1
+                  parent_id: '333444555666777888'
+                - id: '555666777888999000'
+                  guild_id: '123456789012345678'
+                  name: mod-log
+                  type: 0
+                  position: 2
+                  parent_id: '333444555666777888'
+        '401':
+          description: Unauthorized or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Guild not found or not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/me/guilds/{id}/roles:
+    get:
+      summary: List roles for a guild
+      description: |
+        Returns the role list for the specified guild, sorted by position descending
+        (highest role first). Results come from the bot's cached guild data.
+        Requires `CONFIG_VIEW`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Guild snowflake ID.
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: Role list (sorted by position descending)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Role'
+              example:
+                - id: '333444555666777888'
+                  name: Admin
+                  color: 15158332
+                  hoist: true
+                  position: 10
+                  permissions: '268435455'
+                  managed: false
+                  mentionable: false
+                - id: '222333444555666777'
+                  name: Moderator
+                  color: 3447003
+                  hoist: true
+                  position: 5
+                  permissions: '70508346855744'
+                  managed: false
+                  mentionable: true
+        '401':
+          description: Unauthorized or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Guild not found or not configured
           content:
             application/json:
               schema:

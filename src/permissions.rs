@@ -75,13 +75,14 @@ impl State {
     }
 
     /// Fetch guild + config from cache and verify the user has the given permission.
-    /// Returns `ApiError::NotFound` if guild/config is missing, `ApiError::Auth` if denied.
+    /// Returns `ApiError::NotFound` if guild/config is missing, `ApiError::Forbidden` if denied.
+    /// On success, returns the fetched `(Guild, Config)` for use by the caller.
     pub async fn require_guild_permission(
         &self,
         user: &AuthenticatedUser,
         guild_id: &bm_lib::discord::Id,
         perm: Permission,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(Guild, Config), ApiError> {
         let guild = self
             .get_guild(guild_id)
             .await?
@@ -98,6 +99,6 @@ impl State {
             return Err(ApiError::Forbidden("Insufficient permissions".into()));
         }
 
-        Ok(())
+        Ok((guild, config))
     }
 }

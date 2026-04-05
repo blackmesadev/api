@@ -40,7 +40,7 @@ pub struct UserGuild {
 /// 2. For each guild, fetch guild + config from cache/DB (O(m) where m = guild count).
 /// 3. Resolve Discord + DB permissions for each guild using permission inheritance.
 /// 4. Return only guilds where user has CONFIG_VIEW permission (includes Discord admins).
-#[get("/api/guilds")]
+#[get("/api/me/guilds")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_guilds(
     state: web::Data<State>,
@@ -166,7 +166,7 @@ pub async fn get_guilds(
 }
 
 /// `GET /api/guilds/{id}/channels` - list channels for a guild via Discord REST API.
-#[get("/api/guilds/{id}/channels")]
+#[get("/api/me/guilds/{id}/channels")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_guild_channels(
     state: web::Data<State>,
@@ -201,7 +201,7 @@ pub async fn get_guild_channels(
 }
 
 /// `GET /api/guilds/{id}/roles` - list roles for a guild from bot cache.
-#[get("/api/guilds/{id}/roles")]
+#[get("/api/me/guilds/{id}/roles")]
 #[instrument(skip(state, user), fields(user_id = %user.user_id))]
 pub async fn get_guild_roles(
     state: web::Data<State>,
@@ -210,14 +210,9 @@ pub async fn get_guild_roles(
 ) -> Result<web::Json<Vec<Role>>, ApiError> {
     let guild_id = Id::from_str(&path.into_inner())
         .map_err(|_| ApiError::ParseError("Invalid guild ID".into()))?;
-    state
+    let (guild, _config) = state
         .require_guild_permission(&user, &guild_id, Permission::CONFIG_VIEW)
         .await?;
-
-    let guild = state
-        .get_guild(&guild_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Guild not found".into()))?;
 
     let mut roles = guild.roles;
 

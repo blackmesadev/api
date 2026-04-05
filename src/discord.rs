@@ -1,5 +1,4 @@
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 const API_BASE: &str = "https://discord.com/api/v10";
@@ -65,7 +64,7 @@ impl RestClient {
     }
 
     #[instrument(skip(self, token))]
-    pub async fn get_self(&self, token: &str) -> Result<Value, reqwest::Error> {
+    pub async fn get_self(&self, token: &str) -> Result<DiscordUser, reqwest::Error> {
         self.get("users/@me", token).await?.json().await
     }
 
@@ -89,4 +88,15 @@ impl RestClient {
 
         response.json().await
     }
+}
+
+/// Stripped-down Discord user profile returned by `GET /users/@me`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordUser {
+    pub id: String,
+    pub username: String,
+    pub discriminator: String,
+    pub global_name: Option<String>,
+    pub avatar: Option<String>,
+    pub email: Option<String>,
 }

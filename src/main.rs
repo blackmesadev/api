@@ -95,6 +95,7 @@ async fn main() -> std::io::Result<()> {
             // Auth
             .service(auth::oauth_discord)
             .service(auth::refresh_token)
+            .service(auth::get_me)
             // Guild config
             .service(api::get_config)
             .service(api::post_config)
