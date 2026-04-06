@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::discord::DiscordUser;
@@ -122,10 +121,10 @@ impl State {
         &self,
         guild_id: &Id,
         user_id: &Id,
-    ) -> Result<Option<HashSet<Id>>, ApiError> {
+    ) -> Result<Option<Vec<Id>>, ApiError> {
         let key = roles_cache_key(guild_id, user_id);
         self.bot_cache
-            .get::<String, HashSet<Id>>(&key)
+            .get::<String, Vec<Id>>(&key)
             .await
             .map_err(ApiError::from)
     }
@@ -134,7 +133,7 @@ impl State {
     /// the `member_guilds:{user_id}` reverse index written by the bot on every
     /// `GuildMemberUpdate` event.  O(1) - no keyspace scan.
     #[instrument(skip(self))]
-    pub async fn get_member_guilds(&self, user_id: &Id) -> Result<HashSet<Id>, ApiError> {
+    pub async fn get_member_guilds(&self, user_id: &Id) -> Result<Vec<Id>, ApiError> {
         let key = member_guilds_cache_key(user_id);
         let members: Vec<Id> = self
             .bot_cache
@@ -151,9 +150,9 @@ impl State {
     pub async fn get_all_member_roles(
         &self,
         user_id: &Id,
-        guild_ids: &HashSet<Id>,
-    ) -> Result<HashSet<Id>, ApiError> {
-        let mut all_roles = HashSet::new();
+        guild_ids: &Vec<Id>,
+    ) -> Result<Vec<Id>, ApiError> {
+        let mut all_roles = Vec::new();
         for guild_id in guild_ids {
             if let Some(roles) = self.get_member_roles(guild_id, user_id).await? {
                 all_roles.extend(roles);
